@@ -1,0 +1,66 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auto-unpack any zip (nested too) and locate project
+        run: |
+          set -e
+          mkdir -p _src
+          for Z in ./*.zip; do
+            if [ -f "$Z" ]; then echo "Unpacking $Z"; unzip -qo "$Z" -d _src; fi
+          done
+          for i in 1 2 3; do
+            find _src -name '*.zip' | while read -r Z; do
+              D="$(dirname "$Z")/$(basename "$Z" .zip)_x"
+              mkdir -p "$D" && unzip -qo "$Z" -d "$D" && rm "$Z"
+            done
+          done
+          S=$(find _src -maxdepth 8 -name 'settings.gradle*' | head -1)
+          if [ -z "$S" ]; then
+            S=$(find . -maxdepth 3 -name 'settings.gradle*' -not -path './_src/*' | head -1)
+          fi
+          [ -n "$S" ] || { echo "settings.gradle not found"; exit 1; }
+          echo "PROJECT_DIR=$(dirname "$S")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          cp "$PROJECT_DIR"/app/build/outputs/apk/debug/app-debug.apk dist/VoicePlayer.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoicePlayer-apk
+          path: dist/VoicePlayer.apk
+
+      - name: Publish release with APK
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          files: dist/VoicePlayer.apk
